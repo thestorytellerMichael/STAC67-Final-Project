@@ -1,0 +1,303 @@
+---
+title: "Blood Pressure"
+output: powerpoint_presentation
+author: John Ma,Michael Chen
+---
+
+
+
+# Packages
+```{r, warning=FALSE, message=FALSE,include=FALSE}
+library(tidyverse)
+library(MASS)
+library(onewaytests)
+library(readxl)
+library(leaps)
+library(corrplot)
+library(MPV)
+library(olsrr)
+library(ggpubr)
+```
+
+# Reading and cleaning the data frame
+```{r}
+bp <- read_xlsx("BloodPressure.xlsx")
+bp %>% mutate(married = replace(married, married == 'N', 0))%>% 
+  mutate(married = replace(married, married == 'Y', 1)) %>%
+  mutate(gender = replace(gender, gender == 'F', 0)) %>%
+  mutate(gender = replace(gender, gender == 'M', 1)) %>%
+  mutate(smoke = replace(smoke, smoke == 'N', 0)) %>%
+  mutate(smoke = replace(smoke, smoke =='Y', 1))-> bp
+class(bp$gender) = "double"
+class(bp$married) = "double"
+class(bp$smoke) = "double"
+bp
+# Making a testing set and a validation set
+set.seed(1004274037)
+bp_samp <- sample(1:500, 300, replace=FALSE)
+bp_train <- bp[bp_samp,]
+bp_valid <- bp[-bp_samp,]
+bp_train
+bp_valid
+```
+- set aside 60% observations to create the model and 40% to test the model
+
+
+# Main Effect Full Model
+
+```{r}
+bp_full <- lm(data=bp_train, sbp ~ gender + married + smoke + exercise + age + weight + height + overwt + race + alcohol + trt + bmi + stress + salt + chldbear + income + educatn)
+summary(bp_full)
+```
+- p-value is < 0.05, which means that
+
+
+
+# Residual diagnostics
+```{r}
+qqnorm(bp_full$residuals)
+qqline(bp_full$residuals)
+hist(bp_full$residuals)
+#augment(bp_full)
+ggplot(bp_full, aes(x=.fitted, y=.resid)) + geom_point() + geom_hline(yintercept = 0)
+boxcox(bp_full)
+# add bf test here; didn't work earlier
+```
+
+- fitted vs residual values look randomly scattered
+- normal qq plot looks like its in a stright line
+- data seems to be cleaned up here.
+
+
+Tests:  
+```{r}
+shapiro.test(bp_full$residuals)
+#bf.test(data=bp_train, sbp ~ gender + married + smoke + exercise + age + weight + height + overwt + race + alcohol + trt + bmi + stress + salt + chldbear + income + educatn)
+```
+
+- p-value > 0.05, we can conclude the error looks from a normal population
+
+
+# Checks for multicollinearity
+```{r}
+bp_cor <- cor(bp_train)
+corrplot(bp_cor)
+```
+
+# Multicollinearity
+- Estimated regression coefficients with an opposite sign of that expected from theoretical considerations or prio e
+- Standard error is not large -- not a sign 
+- There is a small change in the coefficient of determination when a variable is added/deleted
+- High correlation between predictor variables overwt, weight, height and BMI -- related because ... (source)
+- high correlation between chldbear and gender -- makes sense because only women can bear children.
+- add interaction terms 
+
+VIF: 
+```{r}
+```
+
+
+
+# Backwards elimination
+
+
+# AIC/BIC 
+```{r}
+stepAIC(bp_full, direction = "backward")
+```
+```{r}
+#AIC=1942.39
+bp_reduced <- lm(sbp ~ gender + smoke + exercise + height + alcohol + trt + bmi + 
+    chldbear, data=bp_train)
+summary(bp_reduced)
+```
+
+```{r}
+bp_reduced <- lm(sbp ~ gender + smoke + exercise + height + alcohol + trt + bmi + 
+    chldbear, data=bp_train)
+stepAIC(bp_reduced, direction = "backward")
+```
+```{r}
+bp_reduced2 <- lm(sbp ~  smoke + exercise + height + alcohol + trt + bmi + 
+    chldbear, data=bp_train)
+stepAIC(bp_reduced2, direction = "backward")
+```
+
+perform all regression on the reduced model using leap function
+```{r}
+allreg <- regsubsets(sbp ~ gender + smoke + exercise + height + alcohol + trt + bmi + 
+    chldbear, nbest= 8, data=bp_train)
+n= dim(bp_train)[1]
+aprout = summary(allreg)
+pprime = apply(aprout$which, 1, sum)
+aprout$aic <- aprout$bic - log(n) * pprime + 2* pprime
+with (aprout,round(cbind(which,rsq,adjr2,cp,aic,bic),7))
+```
+
+Checking if removing the terms is better using ANOVA:  
+```{r}
+anova(bp_reduced, bp_full)
+```
+
+- $H_0:$ full model and reduced model give similar effects vs. $H_a:$ full model is better.
+
+- Without interaction terms model -- P-value > 0.05, reduced model is sufficient
+- With interaction terms model -- P-value > 0.05, reduced model is sufficient
+
+
+
+
+# Cross validation for main effect model
+
+```{r}
+anova(bp_reduced)
+#preds_cols <- c('gender' , 'married' , 'smoke' , 'exercise' , 'age' , 'weight' , 'height' , 'overwt' , 'race' , 'alcohol' , 'trt' ,'bmi' ,'stress' , 'salt' , 'chldbear' , 'income' , 'educatn')
+preds_cols <- c('gender' , 'smoke' , 'exercise' , 'height', 'alcohol' , 'trt' ,'bmi' ,'chldbear' )
+pred_bp <- predict(bp_reduced, bp_valid[preds_cols])
+delta_bp <- bp_valid['sbp'] - pred_bp
+n.star <- dim(bp_valid)[1]
+MSPR <- sum((delta_bp_int)^2)/n.star
+MSPR
+```
+
+- MSPR = 666.486
+- MSE = 629.6
+
+
+
+# PRESS Statistic for interaction model
+
+```{r}
+PRESS(bp_reduced)
+```
+
+
+
+
+
+# Graphs of SBP and covariates
+```{r}
+bp_train  %>% pivot_longer(c(gender:educatn), names_to = "xnames", values_to = "x")%>% 
+  ggplot(aes(x=x, y=(sbp)))  + geom_point() + facet_wrap(~xnames, scales = "free") 
+```
+
+# Influence Diagnostics
+
+```{r}
+bp.rstandard <- rstandard(bp_reduced)
+bp.rstudent <- rstudent(bp_reduced)
+bp.inf <- influence.measures(bp_reduced)
+cbind(bp.rstandard, bp.rstudent)
+```
+- does not seem to have many issues here with outliers
+
+
+
+```{r}
+bp.inf
+```
+
+
+
+
+# Graphical Diagnostics for influence
+```{r}
+#p1 <- ols_plot_added_variable(bp_reduced)
+p2 <- ols_plot_cooksd_chart(bp_reduced)
+p3 <- ols_plot_dffits(bp_reduced)
+p4 <- ols_plot_resid_lev(bp_reduced)
+p5 <- ols_plot_resid_stud_fit(bp_reduced)
+p6 <- ols_plot_dfbetas(bp_reduced)
+```
+
+
+
+# Remedial Measures
+
+
+# Adding interaction terms 
+
+
+```{r}
+#With interactions
+bp_full_int <- lm(data=bp_train, sbp ~ gender + married + smoke + exercise + age + weight + height + race + alcohol + trt + bmi + stress + salt + chldbear + income + educatn + overwt + income:educatn + gender:chldbear + stress:alcohol  + stress:weight + stress:overwt + income:age + weight:overwt + bmi:weight + bmi:height  + alcohol:smoke + height:gender + weight:gender + income:stress + educatn:stress  + smoke:exercise + income:chldbear  + chldbear:married + salt:exercise)
+summary(bp_full_int)
+```
+
+- since $R^2$ is really low for blood pressure, we need to add more terms. 
+- added interaction terms to see if $R^2$ goes up significantly or not.
+
+
+
+# AIC/BIC with interaction terms
+```{r}
+stepAIC(bp_full_int, direction = "backward")
+#AIC=1934.13
+```
+
+
+
+```{r}
+bp_reduced_int <- lm(sbp ~ gender + smoke + exercise + age + weight + alcohol + trt + 
+    stress + salt + chldbear + income + educatn + income:educatn + 
+    weight:stress + age:income + smoke:alcohol + exercise:salt, data=bp_train)
+summary(bp_reduced_int)
+```
+
+
+```{r}
+anova(bp_reduced_int, bp_full_int)
+```
+
+
+# Cross Validation for interaction model
+```{r}
+# fit model for training set
+# gender + married + smoke + exercise + age + height + race + 
+#    alcohol + trt + bmi + stress + chldbear + income + educatn + 
+#    overwt + income:educatn + trt:overwt + married:stress + 
+#    smoke:exercise + alcohol:educatn
+bp_valid %>% mutate(`income:educatn` = income*educatn, `trt:overwt` = trt*overwt, `married:stress` = married*stress, `smoke:exercise` = smoke*exercise, `alcohol:educatn` = alcohol*educatn) -> bp_valid_int
+anova(bp_reduced_int)
+pred_cols_int <- c('gender', 'married', 'smoke', 'exercise', 'age', 'height', 'race', 'alcohol' , 'trt', 'bmi', 'stress', 'chldbear', 'income', 'educatn', 'overwt', 'income:educatn', 'trt:overwt', 'smoke:exercise', 'alcohol:educatn')
+pred_bp_int <- predict(lm_AIC_int, bp_valid_int[pred_cols_int])
+delta_bp_int <- bp_valid['sbp'] - pred_bp_int
+n.star_int <- dim(bp_valid_int)[1]
+MSPR_int <- sum((delta_bp_int)^2)/n.star_int 
+MSPR_int
+```
+
+- MSE = 607.6
+- MSPR = 666.486
+
+
+```{r}
+PRESS(lm_AIC_int)
+```
+
+
+# Graphical Diagnostics 
+
+```{r}
+p2_int <- ols_plot_cooksd_chart(bp_reduced)
+p3_int <- ols_plot_dffits(bp_reduced)
+p4_int <- ols_plot_resid_lev(bp_reduced)
+p5_int <- ols_plot_resid_stud_fit(bp_reduced)
+p6_int <- ols_plot_dfbetas(bp_reduced)
+```
+
+
+
+
+
+
+# Conclusion
+
+- Interaction terms made it so MSE is further away from MSPR which isn't what we want.
+- all models were significant since their p-values < 0.05
+- AIC with the interaction terms are much better.
+- $R^2$ is better with the interaction terms
+- both models are significant
+- $R^2$ in general is low, we may need more predictors
+- $R^2$ is really low even after adding interaction terms, this means we are missing a couple of important predictors.
+- our best model would be the one with interactions so far
